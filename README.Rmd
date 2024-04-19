@@ -5,7 +5,11 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
-```{r, warning=FALSE, message=FALSE}
+### PEF-values and asthma
+
+In this document the PEF-values of a person will be analyzed in order to determine whether the person has asthma or not. The data consists of PEF-values measured in the morning and in the evening. Six measurements are taken each time, three before and three after taking asthma medication. The data also contains the day of the week.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
 library(aaltobda)
 library(ggplot2)
 library(ggridges)
@@ -14,56 +18,19 @@ library(gridExtra)
 library(dplyr)
 library(rstan)
 library(loo)
-cores = parallel::detectCores()
+library(lme4)
+library(brms)
+cores = parallel::detectCores() / 4
 options(mc.cores = cores)
 ```
 
-### Tehtävä 1
+Asthma diagnosis: A person is said to have asthma if the relative effect of medication is over 15$\%$ with at least 3/14 probability OR the relative effect of time of day is over 20$\%$ with at least 3/14 probability. A reference value for the person in question is 442 liters per minute.
 
-```{r}
-# Create an empty dataframe
-df <- data.frame()
-
-# Loop for 7 days
-for(day in 1:7) {
-  
-  # Morning measurements before medication
-  morning_before_med <- rnorm(3, mean=300, sd=50)
-  
-  # Morning measurements after medication
-  morning_after_med <- rnorm(3, mean=350, sd=50)
-  
-  # Evening measurements before medication
-  evening_before_med <- rnorm(3, mean=310, sd=50)
-  
-  # Evening measurements after medication
-  evening_after_med <- rnorm(3, mean=360, sd=50)
-  
-  # Create a dataframe for the day
-  day_df <- data.frame(
-    Day = rep(day, 12),
-    Time_of_day = rep(c("Morning", "Evening"), each=6),
-    Medication = rep(c("Before", "After"), each=3, times=2),
-    Measurement = c(morning_before_med, morning_after_med, evening_before_med, evening_after_med)
-  )
-  
-  # Append the day's dataframe to the main dataframe
-  df <- rbind(df, day_df)
-}
-
-# Print the dataframe
-print(df)
+```{r, echo=FALSE}
+pefdata <- read.csv("~/Desktop/R_projektit/PEF/pefdata.csv")
 ```
 
-PEF-mittausten frekventistinen hierarkinen lineaarinen regressio:
-
-```{r}
-library(lme4)
-lm = lmer(Measurement ~ Medication + Time_of_day + (1|Day), data = df)
-summary(lm)
-```
-
-Tehdään Bayesiläinen malli PEF mittauksille, jossa ajan vaikutus oletetaan lineaariseksi.
+Let us define a Bayesian model for the PEF measurements.
 
 ```{stan, output.var="simple"}
 data {
@@ -71,18 +38,14 @@ data {
   array[N] real<lower=0> y; // PEF measurements
   array[N] int<lower=0,upper=1> x; // medication indicator (0=before, 1=after)
   array[N] int<lower=0,upper=1> t; // time of day indicator (0=morning, 1=evening)
-  array[N] int<lower=1,upper=7> d; // day of the week (1=Monday, ..., 7=Sunday)
+  array[N] int<lower=1,upper=7> d; // cat presence indicator (1=cat present, 0=cat absent)
 }
 
 parameters {
   real alpha; // intercept
-  
   real beta1; // effect of medication
-  
   real beta2; // effect of time of day
-  
   real beta3; // effect of day of the week
-  
   real<lower=0> sigma; // standard deviation
 }
 
@@ -95,13 +58,9 @@ transformed parameters {
 model {
   // priors
   alpha ~ normal(300, 100); // weakly informative prior for the intercept
-  
   beta1 ~ normal(0, 100); // weakly informative prior for the effect of medication
-  
   beta2 ~ normal(0, 100); // weakly informative prior for the effect of time of day
-  
   beta3 ~ normal(0, 100); // weakly informative prior for the effect of day of the week
-  
   sigma ~ normal(0, 100); // half-normal due to constraint for the standard deviation
 
   // likelihood
@@ -113,91 +72,69 @@ Now, let's draw samples from the model:
 
 ```{r}
 stan_data <- list(
-  y = df$Measurement,
-  x = as.integer(df$Medication == "After"),
-  t = as.integer(df$Time_of_day == "Evening"),
-  d = as.integer(df$Day),
+  y = pefdata$Measurement,
+  x = pefdata$Medication,
+  t = as.integer(pefdata$Time_of_day == "Evening"),
+  d = pefdata$Day,
   N = nrow(df)
 )
 
 # Draw samples
-model_simple <- rstan::sampling(simple, stan_data, chains = cores/2, iter = 50000)
+model_simple <- rstan::sampling(simple, stan_data, chains = cores, iter = 50000)
 draws_simple <- rstan::extract(model_simple)
 ```
 
+Lets plot the posterior distribution of $\alpha$ (the mean value) with a 95$\%$ credible interval, with the reference value of 442.
 
 ```{r}
+p = mean(draws_simple$alpha > 442)
+ci = quantile(draws_simple$alpha, c(0.025, 0.975))
 
-```
-Tehdään malli, jossa ajan vaikutus on joka päivälle erilainen, eli jokaiselle aikayksikölle stimoidaan oma keskiarvo.
-
-```{stan, output.var="hierarch"}
-data {
-  int<lower=0> N; // number of observations per day
-  int<lower=0> D; // number of days
-  array[D] vector[N] real<lower=0> y; // PEF measurements
-  array[D] vector[N] int<lower=0,upper=1> x; // medication indicator (0=before, 1=after)
-  array[D] vector[N] int<lower=0,upper=1> t; // time of day indicator (0=morning, 1=evening)
-  array[D] vector[N] int<lower=1,upper=7> d; // day of the week (1=Monday, ..., 7=Sunday)
-}
-
-parameters {
-  vector[D] real alpha; // intercept for each day
-  
-  real beta1; // effect of medication
-  
-  real means_mu; // mean of the intercepts
-  real means_sigma<lower=0>; // standard deviation of the intercepts
-  real beta2; // effect of time of day
-  
-  real beta3; // effect of day of the week
-  
-  real<lower=0> sigma; // standard deviation
-}
-
-transformed parameters {
-  vector[N*D] mu;
-  index = 1;
-  for (j in 1:D)
-    for (i in 1:N)
-    mu[index] = alpha[j] + beta1 * x[j,i] + beta2 * t[j,i] + beta3 * d[j,i];
-    index = index + 1;
-}
-
-model {
-  // priors
-  for (j in 1:D)
-    alpha[j] ~ normal(means_mu, means_sigma); // weakly informative prior for the intercept
-    
-  means_mu ~ normal(300, 100); // weakly informative prior for the mean of the intercepts
-  means_sigma ~ normal(0, 100); // half-normal due to constraint for the standard deviation
-    
-  beta1 ~ normal(0, 100); // weakly informative prior for the effect of medication
-  
-  beta2 ~ normal(0, 100); // weakly informative prior for the effect of time of day
-  
-  beta3 ~ normal(0, 100); // weakly informative prior for the effect of day of the week
-  
-  sigma ~ normal(0, 100); // half-normal due to constraint for the standard deviation
-
-  // likelihood
-  y ~ normal(mu, sigma);
-}
+# plot alpha and its ci
+ggplot(as.data.frame(draws_simple)) +
+  geom_density(aes(x=alpha), fill="blue", alpha=0.5) +
+  geom_vline(xintercept=442, linetype="dashed", color="purple") +
+  geom_vline(xintercept=ci[1], linetype="dashed", color="red") +
+  geom_vline(xintercept=ci[2], linetype="dashed", color="red") +
+  annotate("text", x=450, y=0.1, label=paste("P(alpha > 442) = ", round(p, 4))) +
+  theme_minimal()
 ```
 
-Otokset hierarkisesta mallista:
+The credible interval covers the reference value of 442, and the probability that $\alpha > 442$ is approximately 0.19$\%$.
 
-```{r, results='hide'}
-stan_data <- list(
-  y = factory,
-  N = nrow(factory),
-  J = ncol(factory)
-)
+```{r}
+# 95$\%$ credible intervals for medication on time of day
+medication_effect <- draws_simple$beta1
+time_of_day_effect <- draws_simple$beta2
+day_of_week_effect <- draws_simple$beta3
 
-# Draw samples
-model_hier <- rstan::sampling(hierarch, stan_data, chains = 5, iter = 50000)
-draws_hier <- rstan::extract(model_hier)
+# Lets calculate the relative effects of medication and time of day
 
+# alpha plus time 
+alpha_time <- draws_simple$alpha + draws_simple$beta2
+# alpha + medication
+alpha_med <- draws_simple$alpha + draws_simple$beta1
+
+# alpha_time / alpha 
+alpha_time_alpha <- alpha_time / draws_simple$alpha
+# alpha_med / alpha
+alpha_med_alpha <- alpha_med / draws_simple$alpha
+
+# Probability that the relative effect of medication is over 15$%
+p_med <- mean(alpha_med_alpha < 1.15)
+
+# Probability that the relative effect of time of day is over 20$%
+p_time <- mean(alpha_time_alpha < 1.20)
+
+# Plot the relative effects
+ggplot() +
+  geom_density(aes(x=alpha_time_alpha), fill="blue", alpha=0.5) +
+  geom_density(aes(x=alpha_med_alpha), fill="red", alpha=0.5) +
+  geom_vline(xintercept=1.15, linetype="dashed", color="red") +
+  geom_vline(xintercept=1.20, linetype="dashed", color="blue") +
+  annotate("text", x=1.13, y=50, label=paste("P(relative effect of time < 1.20) = ", round(p_time, 4))) +
+  annotate("text", x=1.13, y=45, label=paste("P(relative effect of meds < 1.15) = ", round(p_med, 4))) +
+  theme_minimal()
 ```
 
 
