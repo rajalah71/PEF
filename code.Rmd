@@ -2,12 +2,12 @@
 title: "PEF"
 author: "Johannes Rajala"
 date: "`r Sys.Date()`"
-output: html_document
+output: github_document
 ---
 
 ### PEF-values and asthma
 
-In this document the PEF-values of a person will be analyzed in order to determine whether the person has asthma or not. The data consists of PEF-values measured in the morning and in the evening. Six measurements are taken each time, three before and three after taking asthma medication. The data also contains the day of the week.
+In this document the PEF-values of a person will be analyzed in order to determine whether the person might have asthma or not. The data consists of PEF-values measured in the morning and in the evening. Six measurements are taken each time, three before and three after taking asthma medication. The data also contains the day of the week.
 
 ```{r, warning=FALSE, message=FALSE, echo=FALSE}
 library(aaltobda)
@@ -20,19 +20,19 @@ library(rstan)
 library(loo)
 library(lme4)
 library(brms)
-cores = parallel::detectCores() / 4
+cores = parallel::detectCores() / 8
 options(mc.cores = cores)
 ```
 
-Asthma diagnosis: A person is said to have asthma if the relative effect of medication is over 15$\%$ with at least 3/14 probability OR the relative effect of time of day is over 20$\%$ with at least 3/14 probability. A reference value for the person in question is 442 liters per minute.
+Asthma: if the relative effect of medication is over 15$\%$ with at least 3/14 probability OR the relative effect of time of day is over 20$\%$ with at least 3/14 probability, evidence for asthma is present. A reference value for the mean PEF-value for the person in question is 442 liters per minute.
 
 ```{r, echo=FALSE}
 pefdata <- read.csv("~/Desktop/R_projektit/PEF/pefdata.csv")
 ```
 
-Let us define a Bayesian model for the PEF measurements.
+Let us define a Bayesian linear model for the PEF measurements and draw samples from the posterior distribution.
 
-```{stan, output.var="simple"}
+```{stan, output.var="simple", echo=FALSE, message=FALSE, warning=FALSE, include=FALSE, results="hide"}
 data {
   int<lower=0> N; // number of observations
   array[N] real<lower=0> y; // PEF measurements
@@ -68,25 +68,23 @@ model {
 }
 ```
 
-Now, let's draw samples from the model:
-
-```{r}
+```{r, echo=FALSE, results="hide"}
 stan_data <- list(
   y = pefdata$Measurement,
   x = pefdata$Medication,
   t = as.integer(pefdata$Time_of_day == "Evening"),
   d = pefdata$Day,
-  N = nrow(df)
+  N = nrow(pefdata)
 )
 
 # Draw samples
-model_simple <- rstan::sampling(simple, stan_data, chains = cores, iter = 50000)
+model_simple <- rstan::sampling(simple, stan_data, chains = cores, iter = 100000)
 draws_simple <- rstan::extract(model_simple)
 ```
 
 Lets plot the posterior distribution of $\alpha$ (the mean value) with a 95$\%$ credible interval, with the reference value of 442.
 
-```{r}
+```{r, echo=FALSE}
 p = mean(draws_simple$alpha > 442)
 ci = quantile(draws_simple$alpha, c(0.025, 0.975))
 
@@ -102,7 +100,7 @@ ggplot(as.data.frame(draws_simple)) +
 
 The credible interval covers the reference value of 442, and the probability that $\alpha > 442$ is approximately 0.19$\%$.
 
-```{r}
+```{r, echo=FALSE}
 # 95$\%$ credible intervals for medication on time of day
 medication_effect <- draws_simple$beta1
 time_of_day_effect <- draws_simple$beta2
@@ -137,5 +135,5 @@ ggplot() +
   theme_minimal()
 ```
 
-
+Both the relative effect of medication and time of day are less than the thresholds of 15$\%$ and 20$\%$, respectively, with probabilities of 1 and 1.
 
