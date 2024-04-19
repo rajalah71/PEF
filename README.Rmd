@@ -1,0 +1,204 @@
+---
+title: "PEF"
+author: "Johannes Rajala"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r, warning=FALSE, message=FALSE}
+library(aaltobda)
+library(ggplot2)
+library(ggridges)
+library(bayestools)
+library(gridExtra)
+library(dplyr)
+library(rstan)
+library(loo)
+cores = parallel::detectCores()
+options(mc.cores = cores)
+```
+
+### Tehtävä 1
+
+```{r}
+# Create an empty dataframe
+df <- data.frame()
+
+# Loop for 7 days
+for(day in 1:7) {
+  
+  # Morning measurements before medication
+  morning_before_med <- rnorm(3, mean=300, sd=50)
+  
+  # Morning measurements after medication
+  morning_after_med <- rnorm(3, mean=350, sd=50)
+  
+  # Evening measurements before medication
+  evening_before_med <- rnorm(3, mean=310, sd=50)
+  
+  # Evening measurements after medication
+  evening_after_med <- rnorm(3, mean=360, sd=50)
+  
+  # Create a dataframe for the day
+  day_df <- data.frame(
+    Day = rep(day, 12),
+    Time_of_day = rep(c("Morning", "Evening"), each=6),
+    Medication = rep(c("Before", "After"), each=3, times=2),
+    Measurement = c(morning_before_med, morning_after_med, evening_before_med, evening_after_med)
+  )
+  
+  # Append the day's dataframe to the main dataframe
+  df <- rbind(df, day_df)
+}
+
+# Print the dataframe
+print(df)
+```
+
+PEF-mittausten frekventistinen hierarkinen lineaarinen regressio:
+
+```{r}
+library(lme4)
+lm = lmer(Measurement ~ Medication + Time_of_day + (1|Day), data = df)
+summary(lm)
+```
+
+Tehdään Bayesiläinen malli PEF mittauksille, jossa ajan vaikutus oletetaan lineaariseksi.
+
+```{stan, output.var="simple"}
+data {
+  int<lower=0> N; // number of observations
+  array[N] real<lower=0> y; // PEF measurements
+  array[N] int<lower=0,upper=1> x; // medication indicator (0=before, 1=after)
+  array[N] int<lower=0,upper=1> t; // time of day indicator (0=morning, 1=evening)
+  array[N] int<lower=1,upper=7> d; // day of the week (1=Monday, ..., 7=Sunday)
+}
+
+parameters {
+  real alpha; // intercept
+  
+  real beta1; // effect of medication
+  
+  real beta2; // effect of time of day
+  
+  real beta3; // effect of day of the week
+  
+  real<lower=0> sigma; // standard deviation
+}
+
+transformed parameters {
+  vector[N] mu;
+  for (i in 1:N)
+    mu[i] = alpha + beta1 * x[i] + beta2 * t[i] + beta3 * d[i];
+}
+
+model {
+  // priors
+  alpha ~ normal(300, 100); // weakly informative prior for the intercept
+  
+  beta1 ~ normal(0, 100); // weakly informative prior for the effect of medication
+  
+  beta2 ~ normal(0, 100); // weakly informative prior for the effect of time of day
+  
+  beta3 ~ normal(0, 100); // weakly informative prior for the effect of day of the week
+  
+  sigma ~ normal(0, 100); // half-normal due to constraint for the standard deviation
+
+  // likelihood
+  y ~ normal(mu, sigma);
+}
+```
+
+Now, let's draw samples from the model:
+
+```{r}
+stan_data <- list(
+  y = df$Measurement,
+  x = as.integer(df$Medication == "After"),
+  t = as.integer(df$Time_of_day == "Evening"),
+  d = as.integer(df$Day),
+  N = nrow(df)
+)
+
+# Draw samples
+model_simple <- rstan::sampling(simple, stan_data, chains = cores/2, iter = 50000)
+draws_simple <- rstan::extract(model_simple)
+```
+
+
+```{r}
+
+```
+Tehdään malli, jossa ajan vaikutus on joka päivälle erilainen, eli jokaiselle aikayksikölle stimoidaan oma keskiarvo.
+
+```{stan, output.var="hierarch"}
+data {
+  int<lower=0> N; // number of observations per day
+  int<lower=0> D; // number of days
+  array[D] vector[N] real<lower=0> y; // PEF measurements
+  array[D] vector[N] int<lower=0,upper=1> x; // medication indicator (0=before, 1=after)
+  array[D] vector[N] int<lower=0,upper=1> t; // time of day indicator (0=morning, 1=evening)
+  array[D] vector[N] int<lower=1,upper=7> d; // day of the week (1=Monday, ..., 7=Sunday)
+}
+
+parameters {
+  vector[D] real alpha; // intercept for each day
+  
+  real beta1; // effect of medication
+  
+  real means_mu; // mean of the intercepts
+  real means_sigma<lower=0>; // standard deviation of the intercepts
+  real beta2; // effect of time of day
+  
+  real beta3; // effect of day of the week
+  
+  real<lower=0> sigma; // standard deviation
+}
+
+transformed parameters {
+  vector[N*D] mu;
+  index = 1;
+  for (j in 1:D)
+    for (i in 1:N)
+    mu[index] = alpha[j] + beta1 * x[j,i] + beta2 * t[j,i] + beta3 * d[j,i];
+    index = index + 1;
+}
+
+model {
+  // priors
+  for (j in 1:D)
+    alpha[j] ~ normal(means_mu, means_sigma); // weakly informative prior for the intercept
+    
+  means_mu ~ normal(300, 100); // weakly informative prior for the mean of the intercepts
+  means_sigma ~ normal(0, 100); // half-normal due to constraint for the standard deviation
+    
+  beta1 ~ normal(0, 100); // weakly informative prior for the effect of medication
+  
+  beta2 ~ normal(0, 100); // weakly informative prior for the effect of time of day
+  
+  beta3 ~ normal(0, 100); // weakly informative prior for the effect of day of the week
+  
+  sigma ~ normal(0, 100); // half-normal due to constraint for the standard deviation
+
+  // likelihood
+  y ~ normal(mu, sigma);
+}
+```
+
+Otokset hierarkisesta mallista:
+
+```{r, results='hide'}
+stan_data <- list(
+  y = factory,
+  N = nrow(factory),
+  J = ncol(factory)
+)
+
+# Draw samples
+model_hier <- rstan::sampling(hierarch, stan_data, chains = 5, iter = 50000)
+draws_hier <- rstan::extract(model_hier)
+
+```
+
+
+
