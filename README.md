@@ -23,12 +23,12 @@ samples from the posterior distribution.
 Lets plot the posterior distribution of $\alpha$ (the mean value) with a
 95$\%$ credible interval, with the reference value of 442.
 
-![](README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+![](code_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
 
 The credible interval covers the reference value of 442, and the
 probability that $\alpha > 442$ is approximately 0.19$\%$.
 
-![](README_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
+![](code_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
 
 Both the relative effect of medication and time of day are less than the
 thresholds of 15$\%$ and 20$\%$, respectively, with probabilities of 1
