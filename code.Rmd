@@ -94,7 +94,8 @@ ggplot(as.data.frame(draws_simple)) +
   geom_vline(xintercept=442, linetype="dashed", color="purple") +
   geom_vline(xintercept=ci[1], linetype="dashed", color="red") +
   geom_vline(xintercept=ci[2], linetype="dashed", color="red") +
-  annotate("text", x=450, y=0.1, label=paste("P(alpha > 442) = ", round(p, 4))) +
+  annotate("text", x=445, y=0.1, label=paste("P(mean PEF value > 442) = ", round(p, 4))) +
+  xlab("Mean PEF value") +
   theme_minimal()
 ```
 
@@ -132,6 +133,7 @@ ggplot() +
   geom_vline(xintercept=1.20, linetype="dashed", color="blue") +
   annotate("text", x=1.13, y=50, label=paste("P(relative effect of time < 1.20) = ", round(p_time, 4))) +
   annotate("text", x=1.13, y=45, label=paste("P(relative effect of meds < 1.15) = ", round(p_med, 4))) +
+  xlab("Relative effect") +
   theme_minimal()
 ```
 
